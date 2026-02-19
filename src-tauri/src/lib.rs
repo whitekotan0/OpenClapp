@@ -71,12 +71,31 @@ fn write_auth_profile(agent_id: &str, api_key: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn write_agent_config(agent_id: &str, name: &str, system_prompt: &str) -> Result<(), String> {
+    let mut dir = openclaw_agents_root();
+    dir.push(agent_id);
+    dir.push("agent");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    dir.push("agent.json");
+
+    let config = serde_json::json!({
+        "name": name,
+        "instructions": system_prompt
+    });
+    fs::write(&dir, serde_json::to_string_pretty(&config).unwrap())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
-fn sync_agent_auth(agent_id: String, api_key: String) -> Result<(), String> {
+fn sync_agent_auth(agent_id: String, api_key: String, agent_name: String, system_prompt: String) -> Result<(), String> {
     if api_key.trim().is_empty() {
         return Err("API ключ пустой".into());
     }
-    write_auth_profile(&agent_id, &api_key)
+    write_auth_profile(&agent_id, &api_key)?;
+    write_agent_config(&agent_id, &agent_name, &system_prompt)?;
+    // Всегда синхронизируем main — openclaw работает с ним
+    write_auth_profile("main", &api_key)?;
+    write_agent_config("main", &agent_name, &system_prompt)
 }
 
 // ─── openclaw.json ────────────────────────────────────────────────────────────
@@ -293,19 +312,25 @@ async fn gateway_call(
     agent_id: String,
     message: String,
     session_key: String,
+    system_prompt: Option<String>,
 ) -> Result<String, String> {
     let token = read_gateway_token().unwrap_or_default();
 
-    let params = serde_json::json!({
+    let ikey = format!("{}-{}", session_key,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis());
+
+    let mut params = serde_json::json!({
         "message": message,
         "sessionKey": "main",
-        "idempotencyKey": format!("{}-{}", session_key,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()),
+        "idempotencyKey": ikey,
         "deliver": false
     });
+
+    // systemPrompt не поддерживается openclaw gateway напрямую
+    // промпт задаётся через auth-profile агента
 
     let params_str = params.to_string();
 

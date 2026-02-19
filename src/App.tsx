@@ -143,7 +143,12 @@ function AgentForm({ initial, onSave, onCancel, onDelete }: {
     setSaving(true);
     try {
       // Синхронизируем auth-profile на диске чтобы openclaw знал ключ
-      await invoke('sync_agent_auth', { agentId: form.id, apiKey: form.apiKey });
+      await invoke('sync_agent_auth', {
+  agentId: form.id,
+  apiKey: form.apiKey,
+  agentName: form.name,
+  systemPrompt: form.systemPrompt,
+});
       onSave({ ...form, name: form.name.trim() });
     } catch (e: any) {
       alert(`Ошибка сохранения: ${e}`);
