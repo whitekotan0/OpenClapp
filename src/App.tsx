@@ -17,10 +17,10 @@ interface EnvCheck { node: boolean; node_version: string; openclaw: boolean; ope
 const PROVIDERS = [
   { id: 'anthropic', label: 'Anthropic',                  models: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'],                          needsKey: true,  hasUrl: false },
   { id: 'openai',    label: 'OpenAI',                     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],                             needsKey: true,  hasUrl: false },
-  { id: 'groq',      label: 'Groq',                       models: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'],                      needsKey: true,  hasUrl: false },
+  { id: 'groq',      label: 'Groq',                       models: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'],                     needsKey: true,  hasUrl: false },
   { id: 'together',  label: 'Together AI',                models: ['meta-llama/Llama-3-70b-chat-hf', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],            needsKey: true,  hasUrl: false },
-  { id: 'ollama',    label: 'Ollama (local)',              models: ['llama3.2', 'mistral', 'gemma2', 'qwen2.5'],                                           needsKey: false, hasUrl: true  },
-  { id: 'custom',    label: 'Custom (OpenAI-compatible)',  models: [],                                                                                     needsKey: true,  hasUrl: true  },
+  { id: 'ollama',    label: 'Ollama (local)',             models: ['llama3.2', 'mistral', 'gemma2', 'qwen2.5'],                                          needsKey: false, hasUrl: true  },
+  { id: 'custom',    label: 'Custom (OpenAI-compatible)', models: [],                                                                                    needsKey: true,  hasUrl: true  },
 ];
 
 const STORAGE_KEY   = 'clapp_agents_v2';

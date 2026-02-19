@@ -55,9 +55,9 @@ fn write_auth_profile(agent_id: &str, api_key: &str, provider: &str, base_url: O
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     dir.push("auth-profiles.json");
 
-    // Нормализуем имя провайдера для openclaw
+    // Normalize provider name for openclaw
     let provider_id = match provider {
-        "openai" | "groq" | "together" | "custom" => "openai", // OpenAI-совместимые
+        "openai" | "groq" | "together" | "custom" => "openai", // OpenAI-compatible
         _ => "anthropic",
     };
 
@@ -69,7 +69,7 @@ fn write_auth_profile(agent_id: &str, api_key: &str, provider: &str, base_url: O
         "key": api_key
     });
 
-    // Для OpenAI-совместимых провайдеров добавляем baseUrl
+    // Add baseUrl for OpenAI-compatible providers
     if let Some(url) = base_url.filter(|u| !u.trim().is_empty()) {
         profile_obj["baseUrl"] = serde_json::Value::String(url.to_string());
     }
@@ -81,7 +81,7 @@ fn write_auth_profile(agent_id: &str, api_key: &str, provider: &str, base_url: O
     if provider == "together" {
         profile_obj["baseUrl"] = serde_json::Value::String("https://api.together.xyz/v1".into());
     }
-    // Ollama — без ключа, только URL
+    // Ollama — no key, only URL
     if provider == "ollama" {
         let url = base_url.unwrap_or("http://localhost:11434");
         let profile = serde_json::json!({
@@ -137,9 +137,9 @@ fn sync_agent_auth(
     provider: String,
     base_url: Option<String>,
 ) -> Result<(), String> {
-    // Ollama не требует ключ, остальные — требуют
+    // Ollama doesn't require a key, others do
     if provider != "ollama" && api_key.trim().is_empty() {
-        return Err("API ключ пустой".into());
+        return Err("API key is empty".into());
     }
     let url = base_url.as_deref();
     write_auth_profile(&agent_id, &api_key, &provider, url)?;
@@ -167,14 +167,14 @@ fn ensure_openclaw_config() -> Result<String, String> {
     if config_file.exists() {
         if let Ok(content) = fs::read_to_string(&config_file) {
             if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&content) {
-                // Убираем ключи которые openclaw не принимает
+                // Remove keys that openclaw does not accept
                 if let Some(obj) = v.as_object_mut() {
                     obj.remove("providers");
                     obj.remove("version");
                 }
                 let token = v["gateway"]["auth"]["token"].as_str().unwrap_or("").to_string();
                 if !token.is_empty() {
-                    // Перезаписываем без мусора
+                    // Rewrite without garbage
                     fs::write(&config_file, serde_json::to_string_pretty(&v).unwrap())
                         .map_err(|e| e.to_string())?;
                     return Ok(token);
@@ -183,7 +183,7 @@ fn ensure_openclaw_config() -> Result<String, String> {
         }
     }
 
-    // Создаём минимальный валидный конфиг
+    // Create a minimal valid config
     let token = generate_token();
     let config = serde_json::json!({
         "gateway": {
@@ -202,10 +202,10 @@ fn ensure_openclaw_config() -> Result<String, String> {
     Ok(token)
 }
 
-// ─── Pairing: читаем токен из конфига и вызываем pair ────────────────────────
+// ─── Pairing: read token from config and call pair ────────────────────────
 
 async fn do_pairing(app: &tauri::AppHandle, token: &str) -> Result<(), String> {
-    // Gateway auto-approves pairing при loopback — просто вызываем pair без --url
+    // Gateway auto-approves pairing on loopback — just call pair without --url
     let out = app.shell()
         .command("cmd")
         .args(["/C", "npx", "openclaw", "gateway", "pair", "--token", token])
@@ -219,18 +219,18 @@ async fn do_pairing(app: &tauri::AppHandle, token: &str) -> Result<(), String> {
         String::from_utf8_lossy(&out.stderr)
     );
     println!("[PAIR] {}", combined.trim());
-    Ok(()) // Не фатально в любом случае
+    Ok(()) // Not fatal in any case
 }
 
 // ─── Gateway token ────────────────────────────────────────────────────────────
 
 fn read_gateway_token() -> Result<String, String> {
     let p = openclaw_config_path();
-    if !p.exists() { return Err("openclaw.json не найден".into()); }
+    if !p.exists() { return Err("openclaw.json not found".into()); }
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(p).unwrap_or_default())
-        .map_err(|_| "openclaw.json повреждён".to_string())?;
+        .map_err(|_| "openclaw.json is corrupted".to_string())?;
     let token = v["gateway"]["auth"]["token"].as_str().unwrap_or("").to_string();
-    if token.is_empty() { return Err("Токен пустой".into()); }
+    if token.is_empty() { return Err("Token is empty".into()); }
     Ok(token)
 }
 
@@ -241,7 +241,7 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
     let api_key = load_api_key()?;
 
     if api_key.trim().is_empty() {
-        return Err("Сначала добавь API ключ в настройках агента".into());
+        return Err("Add an API key in the agent settings first".into());
     }
 
     let token = ensure_openclaw_config()?;
@@ -249,7 +249,7 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
 
     let shell = app.shell();
 
-    // Уже запущен?
+    // Already running?
     let health_ok = shell
         .command("cmd")
         .args(["/C", "npx", "openclaw", "gateway", "health"])
@@ -266,7 +266,7 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
         return Ok("running".into());
     }
 
-    // Запускаем gateway
+    // Start gateway
     let (mut rx, child) = shell
         .command("cmd")
         .args([
@@ -277,7 +277,7 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
         .env("ANTHROPIC_API_KEY", &api_key)
         .env("OPENAI_API_KEY", &api_key)
         .spawn()
-        .map_err(|e| format!("Не удалось запустить gateway: {}", e))?;
+        .map_err(|e| format!("Failed to start gateway: {}", e))?;
 
     tauri::async_runtime::spawn(async move {
         use tauri_plugin_shell::process::CommandEvent;
@@ -292,7 +292,7 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
 
     *app.state::<AgentProcess>().0.lock().unwrap() = Some(child);
 
-    // Ждём пока gateway поднимется (до 10 сек)
+    // Wait for gateway to spin up (up to 10 sec)
     let mut gateway_up = false;
     for _ in 0..20 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -315,11 +315,11 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
     }
 
     if !gateway_up {
-        return Err("Gateway не запустился за 10 сек. Проверь: npm install -g openclaw".into());
+        return Err("Gateway failed to start within 10 sec. Check: npm install -g openclaw".into());
     }
 
-    // Делаем pairing чтобы этот клиент мог делать call
-    // Ошибку pairing не считаем фатальной — может уже спарен
+    // Perform pairing so this client can make calls
+    // Do not consider pairing error fatal — might already be paired
     if let Err(e) = do_pairing(&app, &token).await {
         eprintln!("[PAIR ERR] {}", e);
     }
@@ -359,10 +359,10 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 async fn gateway_call(
     app: tauri::AppHandle,
-    agent_id: String,
+    _agent_id: String,
     message: String,
     session_key: String,
-    system_prompt: Option<String>,
+    _system_prompt: Option<String>,
 ) -> Result<String, String> {
     let token = read_gateway_token().unwrap_or_default();
 
@@ -372,15 +372,12 @@ async fn gateway_call(
             .unwrap_or_default()
             .as_millis());
 
-    let mut params = serde_json::json!({
+    let params = serde_json::json!({
         "message": message,
         "sessionKey": "main",
         "idempotencyKey": ikey,
         "deliver": false
     });
-
-    // systemPrompt не поддерживается openclaw gateway напрямую
-    // промпт задаётся через auth-profile агента
 
     let params_str = params.to_string();
 
@@ -409,7 +406,7 @@ async fn gateway_call(
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     if stdout.is_empty() {
-        Err(if stderr.is_empty() { "Пустой ответ от gateway".into() } else { stderr })
+        Err(if stderr.is_empty() { "Empty response from gateway".into() } else { stderr })
     } else {
         Ok(stdout)
     }
