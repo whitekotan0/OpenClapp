@@ -4,32 +4,40 @@ use std::sync::Mutex;
 use std::fs;
 use std::path::PathBuf;
 
+/// Global state to hold the handle of the running OpenClaw process.
+/// Wrapped in a Mutex for thread-safe access across different Tauri commands.
 struct AgentProcess(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
+/// Returns the path to the application's own configuration file.
 fn config_path() -> PathBuf {
     let mut p = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     p.push("clapp");
+    // Ensure the directory exists; ignore errors as they'll be caught during write.
     fs::create_dir_all(&p).ok();
     p.push("config.json");
     p
 }
 
+/// Returns the base directory where OpenClaw stores its data (~/.openclaw).
 fn openclaw_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".openclaw")
 }
 
+/// Path to the main OpenClaw gateway configuration.
 fn openclaw_config_path() -> PathBuf {
     openclaw_dir().join("openclaw.json")
 }
 
+/// Root directory where individual agent configurations are stored.
 fn openclaw_agents_root() -> PathBuf {
     openclaw_dir().join("agents")
 }
 
 // ─── API key ──────────────────────────────────────────────────────────────────
 
+/// Saves the Anthropic API key to the local clapp config.
 #[tauri::command]
 fn save_api_key(key: String) -> Result<(), String> {
     let json = serde_json::json!({ "api_key": key });
@@ -37,6 +45,7 @@ fn save_api_key(key: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Reads the API key from the local clapp config.
 #[tauri::command]
 fn load_api_key() -> Result<String, String> {
     let p = config_path();
@@ -48,6 +57,8 @@ fn load_api_key() -> Result<String, String> {
 
 // ─── Auth profile ─────────────────────────────────────────────────────────────
 
+/// Writes the authentication profile for a specific agent.
+/// This mimics the structure OpenClaw expects: agents/{id}/agent/auth-profiles.json
 fn write_auth_profile(agent_id: &str, api_key: &str) -> Result<(), String> {
     let mut dir = openclaw_agents_root();
     dir.push(agent_id);
@@ -71,6 +82,7 @@ fn write_auth_profile(agent_id: &str, api_key: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Writes the identity and instructions (system prompt) for a specific agent.
 fn write_agent_config(agent_id: &str, name: &str, system_prompt: &str) -> Result<(), String> {
     let mut dir = openclaw_agents_root();
     dir.push(agent_id);
@@ -86,6 +98,8 @@ fn write_agent_config(agent_id: &str, name: &str, system_prompt: &str) -> Result
         .map_err(|e| e.to_string())
 }
 
+/// Synchronizes both the specific agent and the "main" agent profile.
+/// OpenClaw often defaults to the "main" agent for various operations.
 #[tauri::command]
 fn sync_agent_auth(agent_id: String, api_key: String, agent_name: String, system_prompt: String) -> Result<(), String> {
     if api_key.trim().is_empty() {
@@ -93,13 +107,15 @@ fn sync_agent_auth(agent_id: String, api_key: String, agent_name: String, system
     }
     write_auth_profile(&agent_id, &api_key)?;
     write_agent_config(&agent_id, &agent_name, &system_prompt)?;
-    // Всегда синхронизируем main — openclaw работает с ним
+    
+    // Fallback synchronization for the default OpenClaw agent identity.
     write_auth_profile("main", &api_key)?;
     write_agent_config("main", &agent_name, &system_prompt)
 }
 
 // ─── openclaw.json ────────────────────────────────────────────────────────────
 
+/// Generates a unique token for the gateway-to-client handshake.
 fn generate_token() -> String {
     let t = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -108,6 +124,8 @@ fn generate_token() -> String {
     format!("local-{:x}-{:x}", t, std::process::id())
 }
 
+/// Checks for an existing gateway config or creates a minimal valid one.
+/// Returns the authentication token required to call the gateway.
 fn ensure_openclaw_config() -> Result<String, String> {
     let dir = openclaw_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -117,14 +135,14 @@ fn ensure_openclaw_config() -> Result<String, String> {
     if config_file.exists() {
         if let Ok(content) = fs::read_to_string(&config_file) {
             if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&content) {
-                // Убираем ключи которые openclaw не принимает
+                // Remove legacy keys that might cause validation errors in OpenClaw.
                 if let Some(obj) = v.as_object_mut() {
                     obj.remove("providers");
                     obj.remove("version");
                 }
                 let token = v["gateway"]["auth"]["token"].as_str().unwrap_or("").to_string();
                 if !token.is_empty() {
-                    // Перезаписываем без мусора
+                    // Rewrite the cleaned config.
                     fs::write(&config_file, serde_json::to_string_pretty(&v).unwrap())
                         .map_err(|e| e.to_string())?;
                     return Ok(token);
@@ -133,7 +151,7 @@ fn ensure_openclaw_config() -> Result<String, String> {
         }
     }
 
-    // Создаём минимальный валидный конфиг
+    // Initialize a new local-only gateway configuration.
     let token = generate_token();
     let config = serde_json::json!({
         "gateway": {
@@ -152,10 +170,10 @@ fn ensure_openclaw_config() -> Result<String, String> {
     Ok(token)
 }
 
-// ─── Pairing: читаем токен из конфига и вызываем pair ────────────────────────
+// ─── Pairing: reads token and calls pair ──────────────────────────────────────
 
+/// Executes the 'pair' command to authorize the local CLI instance.
 async fn do_pairing(app: &tauri::AppHandle, token: &str) -> Result<(), String> {
-    // Gateway auto-approves pairing при loopback — просто вызываем pair без --url
     let out = app.shell()
         .command("cmd")
         .args(["/C", "npx", "openclaw", "gateway", "pair", "--token", token])
@@ -169,11 +187,12 @@ async fn do_pairing(app: &tauri::AppHandle, token: &str) -> Result<(), String> {
         String::from_utf8_lossy(&out.stderr)
     );
     println!("[PAIR] {}", combined.trim());
-    Ok(()) // Не фатально в любом случае
+    Ok(()) 
 }
 
 // ─── Gateway token ────────────────────────────────────────────────────────────
 
+/// Helper to extract the token from the filesystem for subsequent API calls.
 fn read_gateway_token() -> Result<String, String> {
     let p = openclaw_config_path();
     if !p.exists() { return Err("openclaw.json не найден".into()); }
@@ -186,6 +205,7 @@ fn read_gateway_token() -> Result<String, String> {
 
 // ─── Gateway start/stop/status ────────────────────────────────────────────────
 
+/// Main logic to start the background OpenClaw process.
 #[tauri::command]
 async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
     let api_key = load_api_key()?;
@@ -199,7 +219,7 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
 
     let shell = app.shell();
 
-    // Уже запущен?
+    // Check if the gateway is already running by querying its health endpoint.
     let health_ok = shell
         .command("cmd")
         .args(["/C", "npx", "openclaw", "gateway", "health"])
@@ -216,7 +236,7 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
         return Ok("running".into());
     }
 
-    // Запускаем gateway
+    // Spawn the gateway process. API keys are passed via environment variables.
     let (mut rx, child) = shell
         .command("cmd")
         .args([
@@ -229,6 +249,7 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("Не удалось запустить gateway: {}", e))?;
 
+    // Pipe process stdout/stderr to the Rust console for debugging.
     tauri::async_runtime::spawn(async move {
         use tauri_plugin_shell::process::CommandEvent;
         while let Some(ev) = rx.recv().await {
@@ -240,9 +261,10 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
         }
     });
 
+    // Store the process handle in the global state.
     *app.state::<AgentProcess>().0.lock().unwrap() = Some(child);
 
-    // Ждём пока gateway поднимется (до 10 сек)
+    // Poll the health endpoint for up to 10 seconds to ensure the server started successfully.
     let mut gateway_up = false;
     for _ in 0..20 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -268,8 +290,6 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
         return Err("Gateway не запустился за 10 сек. Проверь: npm install -g openclaw".into());
     }
 
-    // Делаем pairing чтобы этот клиент мог делать call
-    // Ошибку pairing не считаем фатальной — может уже спарен
     if let Err(e) = do_pairing(&app, &token).await {
         eprintln!("[PAIR ERR] {}", e);
     }
@@ -277,6 +297,7 @@ async fn start_agent(app: tauri::AppHandle) -> Result<String, String> {
     Ok("running".into())
 }
 
+/// Kills the running child process and clears the state.
 #[tauri::command]
 fn stop_agent(app: tauri::AppHandle) -> Result<String, String> {
     if let Some(child) = app.state::<AgentProcess>().0.lock().unwrap().take() {
@@ -285,6 +306,7 @@ fn stop_agent(app: tauri::AppHandle) -> Result<String, String> {
     Ok("stopped".into())
 }
 
+/// Checks current gateway status via CLI health check.
 #[tauri::command]
 async fn gateway_status(app: tauri::AppHandle) -> Result<String, String> {
     let out = app.shell()
@@ -306,6 +328,7 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<String, String> {
 
 // ─── Gateway call ─────────────────────────────────────────────────────────────
 
+/// Sends a prompt/message to the agent via the gateway CLI.
 #[tauri::command]
 async fn gateway_call(
     app: tauri::AppHandle,
@@ -316,6 +339,7 @@ async fn gateway_call(
 ) -> Result<String, String> {
     let token = read_gateway_token().unwrap_or_default();
 
+    // Generate a unique idempotency key to prevent double-processing.
     let ikey = format!("{}-{}", session_key,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -328,9 +352,6 @@ async fn gateway_call(
         "idempotencyKey": ikey,
         "deliver": false
     });
-
-    // systemPrompt не поддерживается openclaw gateway напрямую
-    // промпт задаётся через auth-profile агента
 
     let params_str = params.to_string();
 
@@ -367,6 +388,8 @@ async fn gateway_call(
 
 // ─── Terminal ─────────────────────────────────────────────────────────────────
 
+/// Executes a generic shell command on the host OS.
+/// Includes 'chcp 65001' to ensure Windows Command Prompt uses UTF-8 encoding.
 #[tauri::command]
 async fn run_command(app: tauri::AppHandle, cmd: String) -> Result<String, String> {
     let out = app.shell()
@@ -386,6 +409,7 @@ async fn run_command(app: tauri::AppHandle, cmd: String) -> Result<String, Strin
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Register the global process state.
         .manage(AgentProcess(Mutex::new(None)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
